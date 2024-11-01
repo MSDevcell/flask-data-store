@@ -1,9 +1,11 @@
-from flask import request
+from flask import request, make_response
 from flask_restx import Resource
 from app import db
 from models import Item
 from api.serializers import item_model, item_input_model
 from utils.validators import validate_item_input
+import csv
+from io import StringIO
 
 def register_routes(ns):
     @ns.route('/')
@@ -29,6 +31,37 @@ def register_routes(ns):
             db.session.add(item)
             db.session.commit()
             return item, 201
+
+    @ns.route('/export')
+    class ItemExport(Resource):
+        @ns.doc('export_items', 
+               description='Export all items as CSV file',
+               responses={200: 'Success - Returns a CSV file with all items'})
+        def get(self):
+            """Export all items as CSV"""
+            items = Item.query.all()
+            
+            # Create a string buffer to write CSV data
+            si = StringIO()
+            writer = csv.writer(si)
+            
+            # Write headers
+            writer.writerow(['ID', 'Title', 'Description', 'Created At', 'Updated At'])
+            
+            # Write item data
+            for item in items:
+                writer.writerow([
+                    item.id,
+                    item.title,
+                    item.description,
+                    item.created_at.isoformat(),
+                    item.updated_at.isoformat()
+                ])
+            
+            output = make_response(si.getvalue())
+            output.headers["Content-Disposition"] = "attachment; filename=items_export.csv"
+            output.headers["Content-type"] = "text/csv"
+            return output
 
     @ns.route('/<int:id>')
     @ns.response(404, 'Item not found')
