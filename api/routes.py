@@ -86,15 +86,20 @@ def register_routes(ns):
                         'message': 'Unable to establish database connection'
                     }), 503
 
-                logger.info("Fetching string-type items")
-                items = Item.query.order_by(Item.created_at.desc()).all()
-                logger.info(f"Successfully retrieved {len(items)} items")
+                logger.info("Fetching speech items")
+                items = Item.query.filter_by(description='speech').order_by(Item.created_at.desc()).all()
+                
+                # Debug logging for found items
+                logger.debug(f"Found {len(items)} speech items:")
+                for item in items:
+                    logger.debug(f"Item {item.id}: {item.title} (created: {item.created_at})")
                 
                 # Return empty list if no items found
                 if not items:
-                    logger.info("No items found")
+                    logger.info("No speech items found")
                     return []
                 
+                logger.info(f"Successfully retrieved {len(items)} speech items")
                 return items
                 
             except DatabaseError as e:
