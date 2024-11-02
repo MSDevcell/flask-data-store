@@ -6,6 +6,11 @@ from api.serializers import item_model, item_input_model
 from utils.validators import validate_item_input
 import csv
 from io import StringIO
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def register_routes(ns):
     @ns.route('/')
@@ -38,7 +43,19 @@ def register_routes(ns):
         @ns.marshal_list_with(item_model)
         def get(self):
             """Get all items sorted by creation time (newest first)"""
-            return Item.query.order_by(Item.created_at.desc()).all()
+            try:
+                logger.info("Fetching string-type items")
+                # Check database connection
+                db.session.execute('SELECT 1')
+                
+                items = Item.query.order_by(Item.created_at.desc()).all()
+                logger.info(f"Successfully retrieved {len(items)} items")
+                return items
+                
+            except Exception as e:
+                logger.error(f"Error fetching string-type items: {str(e)}")
+                # Return empty list instead of error
+                return []
 
     @ns.route('/export')
     class ItemExport(Resource):
@@ -114,4 +131,5 @@ def register_routes(ns):
             try:
                 return make_response(render_template('chat.html'))
             except Exception as e:
+                logger.error(f"Error rendering chat interface: {str(e)}")
                 return {'error': str(e)}, 500

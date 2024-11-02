@@ -11,10 +11,15 @@
         <div class="row justify-content-center">
             <div class="col-md-8">
                 <div class="card">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center">
                         <h3 class="mb-0">Chat Messages</h3>
+                        <div id="connectionStatus" class="badge bg-secondary">Connecting...</div>
                     </div>
                     <div class="card-body">
+                        <div id="errorAlert" class="alert alert-danger d-none" role="alert">
+                            <strong>Error:</strong> <span id="errorMessage"></span>
+                            <div id="retryMessage" class="mt-2"></div>
+                        </div>
                         <div id="loading" class="text-center d-none">
                             <div class="spinner-border text-primary" role="status">
                                 <span class="visually-hidden">Loading...</span>
@@ -36,9 +41,41 @@
     </div>
 
     <script>
+        // Cache for messages and connection state
+        let messageCache = [];
+        let isOnline = true;
+        let retryCount = 0;
+        let retryTimeout = null;
+        const MAX_RETRY_DELAY = 32000; // Maximum retry delay in milliseconds
+
+        function updateConnectionStatus(status, className) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.className = `badge ${className}`;
+            statusElement.textContent = status;
+        }
+
         function formatTimestamp(isoString) {
             const date = new Date(isoString);
             return date.toLocaleTimeString();
+        }
+
+        function showError(message, retryIn = null) {
+            const errorDiv = document.getElementById('errorAlert');
+            const errorMessage = document.getElementById('errorMessage');
+            const retryMessage = document.getElementById('retryMessage');
+            
+            errorMessage.textContent = message;
+            if (retryIn !== null) {
+                retryMessage.textContent = `Retrying in ${Math.ceil(retryIn / 1000)} seconds...`;
+            } else {
+                retryMessage.textContent = '';
+            }
+            
+            errorDiv.classList.remove('d-none');
+        }
+
+        function hideError() {
+            document.getElementById('errorAlert').classList.add('d-none');
         }
 
         function showLoading() {
@@ -49,8 +86,12 @@
             document.getElementById('loading').classList.add('d-none');
         }
 
-        function displayMessages(items) {
+        function displayMessages(items, fromCache = false) {
             const messagesDiv = document.getElementById('messages');
+            if (!fromCache) {
+                messageCache = items; // Update cache with new messages
+            }
+            
             messagesDiv.innerHTML = '';
             
             items.forEach(item => {
@@ -66,14 +107,54 @@
             });
         }
 
+        function calculateRetryDelay() {
+            // Exponential backoff with jitter
+            const baseDelay = Math.min(1000 * Math.pow(2, retryCount), MAX_RETRY_DELAY);
+            const jitter = Math.random() * 1000; // Add up to 1 second of random jitter
+            return baseDelay + jitter;
+        }
+
         async function fetchMessages() {
             try {
                 showLoading();
                 const response = await fetch('/api/items/string-type');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
                 const items = await response.json();
+                
+                // Success handling
+                hideError();
                 displayMessages(items);
+                updateConnectionStatus('Connected', 'bg-success');
+                isOnline = true;
+                retryCount = 0; // Reset retry count on successful connection
+                
             } catch (error) {
                 console.error('Error fetching messages:', error);
+                isOnline = false;
+                updateConnectionStatus('Disconnected', 'bg-danger');
+                
+                // Show cached messages if available
+                if (messageCache.length > 0) {
+                    displayMessages(messageCache, true);
+                }
+                
+                // Calculate retry delay and schedule retry
+                const retryDelay = calculateRetryDelay();
+                showError('Failed to fetch messages. Check your connection.', retryDelay);
+                
+                // Clear existing timeout if any
+                if (retryTimeout) {
+                    clearTimeout(retryTimeout);
+                }
+                
+                // Schedule retry
+                retryTimeout = setTimeout(() => {
+                    retryCount++;
+                    fetchMessages();
+                }, retryDelay);
+                
             } finally {
                 hideLoading();
             }
@@ -101,18 +182,38 @@
                 if (response.ok) {
                     titleInput.value = '';
                     await fetchMessages();
+                } else {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
             } catch (error) {
                 console.error('Error sending message:', error);
+                showError('Failed to send message. Please try again.');
             }
         }
+
+        // Handle online/offline states
+        window.addEventListener('online', () => {
+            isOnline = true;
+            updateConnectionStatus('Reconnecting...', 'bg-warning');
+            fetchMessages();
+        });
+
+        window.addEventListener('offline', () => {
+            isOnline = false;
+            updateConnectionStatus('Offline', 'bg-danger');
+            showError('You are offline. Messages will be loaded when connection is restored.');
+        });
 
         // Set up event listeners
         document.getElementById('messageForm').addEventListener('submit', sendMessage);
 
         // Initial fetch and set up auto-refresh
         fetchMessages();
-        setInterval(fetchMessages, 1000);
+        setInterval(() => {
+            if (isOnline) {
+                fetchMessages();
+            }
+        }, 1000);
     </script>
 </body>
 </html>
