@@ -36,6 +36,10 @@
                         <form id="messageForm" class="d-flex gap-2">
                             <input type="text" id="titleInput" class="form-control" placeholder="Enter message" required>
                             <button type="submit" class="btn btn-primary" id="sendButton">Send</button>
+                            <button type="button" class="btn btn-secondary" id="refreshButton">
+                                <span id="refreshSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                                Refresh
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -62,14 +66,18 @@
         function updateUIState(isConnected) {
             const sendButton = document.getElementById('sendButton');
             const titleInput = document.getElementById('titleInput');
+            const refreshButton = document.getElementById('refreshButton');
             
             sendButton.disabled = !isConnected;
             titleInput.disabled = !isConnected;
+            refreshButton.disabled = !isConnected;
             
             if (!isConnected) {
                 sendButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Connecting...';
+                refreshButton.disabled = true;
             } else {
                 sendButton.textContent = 'Send';
+                refreshButton.disabled = false;
             }
         }
 
@@ -109,10 +117,14 @@
 
         function showLoading() {
             document.getElementById('loading').classList.remove('d-none');
+            document.getElementById('refreshSpinner').classList.remove('d-none');
+            document.getElementById('refreshButton').disabled = true;
         }
 
         function hideLoading() {
             document.getElementById('loading').classList.add('d-none');
+            document.getElementById('refreshSpinner').classList.add('d-none');
+            document.getElementById('refreshButton').disabled = false;
         }
 
         function displayMessages(items, fromCache = false) {
@@ -222,7 +234,7 @@
                     },
                     body: JSON.stringify({
                         title: message,
-                        description: 'chat message'
+                        description: 'speech'
                     })
                 });
 
@@ -252,6 +264,11 @@
             fetchMessages(true);
         });
 
+        // Handle refresh button click
+        document.getElementById('refreshButton').addEventListener('click', () => {
+            fetchMessages();
+        });
+
         // Handle online/offline states
         window.addEventListener('online', () => {
             isOnline = true;
@@ -268,13 +285,8 @@
         // Set up event listeners
         document.getElementById('messageForm').addEventListener('submit', sendMessage);
 
-        // Initial fetch and set up auto-refresh
+        // Initial fetch
         fetchMessages();
-        setInterval(() => {
-            if (isOnline && retryCount === 0) {
-                fetchMessages();
-            }
-        }, 1000);
     </script>
 </body>
 </html>
