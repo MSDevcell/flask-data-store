@@ -7,6 +7,7 @@ from utils.validators import validate_item_input
 import csv
 from io import StringIO
 import logging
+from sqlalchemy.exc import SQLAlchemyError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,23 +20,35 @@ def register_routes(ns):
         @ns.marshal_list_with(item_model)
         def get(self):
             """List all items"""
-            return Item.query.all()
+            try:
+                items = Item.query.all()
+                logger.debug(f"Retrieved {len(items)} items")
+                return items
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when listing items: {str(e)}")
+                return [], 500
 
         @ns.doc('create_item')
         @ns.expect(item_input_model)
         @ns.marshal_with(item_model, code=201)
         def post(self):
             """Create a new item"""
-            data = request.json
-            validate_item_input(data)
-            
-            item = Item(
-                title=data['title'],
-                description=data.get('description', '')
-            )
-            db.session.add(item)
-            db.session.commit()
-            return item, 201
+            try:
+                data = request.json
+                validate_item_input(data)
+                
+                item = Item(
+                    title=data['title'],
+                    description=data.get('description', '')
+                )
+                db.session.add(item)
+                db.session.commit()
+                logger.info(f"Created new item with id: {item.id}")
+                return item, 201
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when creating item: {str(e)}")
+                db.session.rollback()
+                return {'error': 'Database error occurred'}, 500
 
     @ns.route('/string-type')
     class StringItems(Resource):
@@ -44,18 +57,32 @@ def register_routes(ns):
         def get(self):
             """Get all items sorted by creation time (newest first)"""
             try:
-                logger.info("Fetching string-type items")
-                # Check database connection
-                db.session.execute('SELECT 1')
+                logger.info("Checking database connection")
+                # Check database connection using db.text()
+                db.session.execute(db.text('SELECT 1'))
                 
+                logger.info("Fetching string-type items")
                 items = Item.query.order_by(Item.created_at.desc()).all()
                 logger.info(f"Successfully retrieved {len(items)} items")
+                
+                # Debug log item details
+                for item in items:
+                    logger.debug(f"Item {item.id}: {item.title} (created: {item.created_at})")
+                
                 return items
                 
-            except Exception as e:
-                logger.error(f"Error fetching string-type items: {str(e)}")
-                # Return empty list instead of error
+            except SQLAlchemyError as e:
+                logger.error(f"Database error in string-type items: {str(e)}")
+                db.session.rollback()
                 return []
+            except Exception as e:
+                logger.error(f"Unexpected error in string-type items: {str(e)}")
+                return []
+            finally:
+                try:
+                    db.session.close()
+                except Exception as e:
+                    logger.error(f"Error closing database session: {str(e)}")
 
     @ns.route('/export')
     class ItemExport(Resource):
@@ -64,29 +91,34 @@ def register_routes(ns):
                responses={200: 'Success - Returns a CSV file with all items'})
         def get(self):
             """Export all items as CSV"""
-            items = Item.query.all()
-            
-            # Create a string buffer to write CSV data
-            si = StringIO()
-            writer = csv.writer(si)
-            
-            # Write headers
-            writer.writerow(['ID', 'Title', 'Description', 'Created At', 'Updated At'])
-            
-            # Write item data
-            for item in items:
-                writer.writerow([
-                    item.id,
-                    item.title,
-                    item.description,
-                    item.created_at.isoformat(),
-                    item.updated_at.isoformat()
-                ])
-            
-            output = make_response(si.getvalue())
-            output.headers["Content-Disposition"] = "attachment; filename=items_export.csv"
-            output.headers["Content-type"] = "text/csv"
-            return output
+            try:
+                items = Item.query.all()
+                logger.info(f"Exporting {len(items)} items to CSV")
+                
+                # Create a string buffer to write CSV data
+                si = StringIO()
+                writer = csv.writer(si)
+                
+                # Write headers
+                writer.writerow(['ID', 'Title', 'Description', 'Created At', 'Updated At'])
+                
+                # Write item data
+                for item in items:
+                    writer.writerow([
+                        item.id,
+                        item.title,
+                        item.description,
+                        item.created_at.isoformat(),
+                        item.updated_at.isoformat()
+                    ])
+                
+                output = make_response(si.getvalue())
+                output.headers["Content-Disposition"] = "attachment; filename=items_export.csv"
+                output.headers["Content-type"] = "text/csv"
+                return output
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when exporting items: {str(e)}")
+                return {'error': 'Database error occurred'}, 500
 
     @ns.route('/<int:id>')
     @ns.response(404, 'Item not found')
@@ -96,31 +128,48 @@ def register_routes(ns):
         @ns.marshal_with(item_model)
         def get(self, id):
             """Fetch an item by ID"""
-            item = Item.query.get_or_404(id)
-            return item
+            try:
+                item = Item.query.get_or_404(id)
+                logger.debug(f"Retrieved item {id}: {item.title}")
+                return item
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when fetching item {id}: {str(e)}")
+                return {'error': 'Database error occurred'}, 500
 
         @ns.doc('update_item')
         @ns.expect(item_input_model)
         @ns.marshal_with(item_model)
         def put(self, id):
             """Update an item"""
-            item = Item.query.get_or_404(id)
-            data = request.json
-            validate_item_input(data)
-            
-            item.title = data['title']
-            item.description = data.get('description', item.description)
-            db.session.commit()
-            return item
+            try:
+                item = Item.query.get_or_404(id)
+                data = request.json
+                validate_item_input(data)
+                
+                item.title = data['title']
+                item.description = data.get('description', item.description)
+                db.session.commit()
+                logger.info(f"Updated item {id}")
+                return item
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when updating item {id}: {str(e)}")
+                db.session.rollback()
+                return {'error': 'Database error occurred'}, 500
 
         @ns.doc('delete_item')
         @ns.response(204, 'Item deleted')
         def delete(self, id):
             """Delete an item"""
-            item = Item.query.get_or_404(id)
-            db.session.delete(item)
-            db.session.commit()
-            return '', 204
+            try:
+                item = Item.query.get_or_404(id)
+                db.session.delete(item)
+                db.session.commit()
+                logger.info(f"Deleted item {id}")
+                return '', 204
+            except SQLAlchemyError as e:
+                logger.error(f"Database error when deleting item {id}: {str(e)}")
+                db.session.rollback()
+                return {'error': 'Database error occurred'}, 500
 
     # Chat interface route
     @ns.route('/chat')
