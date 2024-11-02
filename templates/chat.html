@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Chat</title>
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container py-4">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="mb-0">Chat Messages</h3>
+                    </div>
+                    <div class="card-body">
+                        <div id="loading" class="text-center d-none">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                        <div id="messages" class="d-flex flex-column gap-2">
+                            <!-- Messages will be inserted here -->
+                        </div>
+                    </div>
+                    <div class="card-footer">
+                        <form id="messageForm" class="d-flex gap-2">
+                            <input type="text" id="titleInput" class="form-control" placeholder="Enter message" required>
+                            <button type="submit" class="btn btn-primary">Send</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function formatTimestamp(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleTimeString();
+        }
+
+        function showLoading() {
+            document.getElementById('loading').classList.remove('d-none');
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').classList.add('d-none');
+        }
+
+        function displayMessages(items) {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            
+            items.forEach(item => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'card';
+                messageDiv.innerHTML = `
+                    <div class="card-body">
+                        <p class="card-text">${item.title}</p>
+                        <small class="text-muted">Posted at ${formatTimestamp(item.created_at)}</small>
+                    </div>
+                `;
+                messagesDiv.appendChild(messageDiv);
+            });
+        }
+
+        async function fetchMessages() {
+            try {
+                showLoading();
+                const response = await fetch('/api/items/string-type');
+                const items = await response.json();
+                displayMessages(items);
+            } catch (error) {
+                console.error('Error fetching messages:', error);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function sendMessage(event) {
+            event.preventDefault();
+            const titleInput = document.getElementById('titleInput');
+            const message = titleInput.value.trim();
+            
+            if (!message) return;
+
+            try {
+                const response = await fetch('/api/items/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        title: message,
+                        description: 'chat message'
+                    })
+                });
+
+                if (response.ok) {
+                    titleInput.value = '';
+                    await fetchMessages();
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+            }
+        }
+
+        // Set up event listeners
+        document.getElementById('messageForm').addEventListener('submit', sendMessage);
+
+        // Initial fetch and set up auto-refresh
+        fetchMessages();
+        setInterval(fetchMessages, 1000);
+    </script>
+</body>
+</html>

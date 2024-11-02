@@ -1,4 +1,4 @@
-from flask import request, make_response
+from flask import request, make_response, render_template
 from flask_restx import Resource
 from app import db
 from models import Item
@@ -31,6 +31,14 @@ def register_routes(ns):
             db.session.add(item)
             db.session.commit()
             return item, 201
+
+    @ns.route('/string-type')
+    class StringItems(Resource):
+        @ns.doc('get_string_items')
+        @ns.marshal_list_with(item_model)
+        def get(self):
+            """Get all items sorted by creation time (newest first)"""
+            return Item.query.order_by(Item.created_at.desc()).all()
 
     @ns.route('/export')
     class ItemExport(Resource):
@@ -96,3 +104,14 @@ def register_routes(ns):
             db.session.delete(item)
             db.session.commit()
             return '', 204
+
+    # Chat interface route
+    @ns.route('/chat')
+    class ChatInterface(Resource):
+        @ns.doc('chat_interface')
+        def get(self):
+            """Render chat interface"""
+            try:
+                return make_response(render_template('chat.html'))
+            except Exception as e:
+                return {'error': str(e)}, 500
