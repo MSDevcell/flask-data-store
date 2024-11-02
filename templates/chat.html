@@ -19,6 +19,9 @@
                         <div id="errorAlert" class="alert alert-danger d-none" role="alert">
                             <strong>Error:</strong> <span id="errorMessage"></span>
                             <div id="retryMessage" class="mt-2"></div>
+                            <button id="retryButton" class="btn btn-outline-danger btn-sm mt-2 d-none">
+                                Retry Now
+                            </button>
                         </div>
                         <div id="loading" class="text-center d-none">
                             <div class="spinner-border text-primary" role="status">
@@ -32,7 +35,7 @@
                     <div class="card-footer">
                         <form id="messageForm" class="d-flex gap-2">
                             <input type="text" id="titleInput" class="form-control" placeholder="Enter message" required>
-                            <button type="submit" class="btn btn-primary">Send</button>
+                            <button type="submit" class="btn btn-primary" id="sendButton">Send</button>
                         </form>
                     </div>
                 </div>
@@ -41,17 +44,33 @@
     </div>
 
     <script>
-        // Cache for messages and connection state
+        // Cache and state management
         let messageCache = [];
         let isOnline = true;
         let retryCount = 0;
         let retryTimeout = null;
+        const MAX_RETRY_COUNT = 5;
         const MAX_RETRY_DELAY = 32000; // Maximum retry delay in milliseconds
+        const INITIAL_RETRY_DELAY = 1000; // Start with 1 second
 
         function updateConnectionStatus(status, className) {
             const statusElement = document.getElementById('connectionStatus');
             statusElement.className = `badge ${className}`;
             statusElement.textContent = status;
+        }
+
+        function updateUIState(isConnected) {
+            const sendButton = document.getElementById('sendButton');
+            const titleInput = document.getElementById('titleInput');
+            
+            sendButton.disabled = !isConnected;
+            titleInput.disabled = !isConnected;
+            
+            if (!isConnected) {
+                sendButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Connecting...';
+            } else {
+                sendButton.textContent = 'Send';
+            }
         }
 
         function formatTimestamp(isoString) {
@@ -63,19 +82,29 @@
             const errorDiv = document.getElementById('errorAlert');
             const errorMessage = document.getElementById('errorMessage');
             const retryMessage = document.getElementById('retryMessage');
+            const retryButton = document.getElementById('retryButton');
             
             errorMessage.textContent = message;
+            
             if (retryIn !== null) {
                 retryMessage.textContent = `Retrying in ${Math.ceil(retryIn / 1000)} seconds...`;
+                retryButton.classList.remove('d-none');
             } else {
                 retryMessage.textContent = '';
+                retryButton.classList.add('d-none');
             }
             
             errorDiv.classList.remove('d-none');
+            updateUIState(false);
         }
 
         function hideError() {
-            document.getElementById('errorAlert').classList.add('d-none');
+            const errorDiv = document.getElementById('errorAlert');
+            const retryButton = document.getElementById('retryButton');
+            
+            errorDiv.classList.add('d-none');
+            retryButton.classList.add('d-none');
+            updateUIState(true);
         }
 
         function showLoading() {
@@ -88,19 +117,22 @@
 
         function displayMessages(items, fromCache = false) {
             const messagesDiv = document.getElementById('messages');
+            
             if (!fromCache) {
-                messageCache = items; // Update cache with new messages
+                // Only update cache if these are new messages
+                messageCache = items;
             }
             
             messagesDiv.innerHTML = '';
             
             items.forEach(item => {
                 const messageDiv = document.createElement('div');
-                messageDiv.className = 'card';
+                messageDiv.className = 'card' + (fromCache ? ' opacity-75' : '');
                 messageDiv.innerHTML = `
                     <div class="card-body">
                         <p class="card-text">${item.title}</p>
                         <small class="text-muted">Posted at ${formatTimestamp(item.created_at)}</small>
+                        ${fromCache ? '<span class="badge bg-warning text-dark ms-2">Cached</span>' : ''}
                     </div>
                 `;
                 messagesDiv.appendChild(messageDiv);
@@ -109,23 +141,27 @@
 
         function calculateRetryDelay() {
             // Exponential backoff with jitter
-            const baseDelay = Math.min(1000 * Math.pow(2, retryCount), MAX_RETRY_DELAY);
+            const baseDelay = Math.min(INITIAL_RETRY_DELAY * Math.pow(2, retryCount), MAX_RETRY_DELAY);
             const jitter = Math.random() * 1000; // Add up to 1 second of random jitter
             return baseDelay + jitter;
         }
 
-        async function fetchMessages() {
+        async function fetchMessages(isRetry = false) {
             try {
-                showLoading();
-                const response = await fetch('/api/items/string-type');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                if (!isRetry) {
+                    showLoading();
                 }
-                const items = await response.json();
+                
+                const response = await fetch('/api/items/string-type');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.message || `HTTP error! status: ${response.status}`);
+                }
                 
                 // Success handling
                 hideError();
-                displayMessages(items);
+                displayMessages(data);
                 updateConnectionStatus('Connected', 'bg-success');
                 isOnline = true;
                 retryCount = 0; // Reset retry count on successful connection
@@ -140,20 +176,27 @@
                     displayMessages(messageCache, true);
                 }
                 
-                // Calculate retry delay and schedule retry
-                const retryDelay = calculateRetryDelay();
-                showError('Failed to fetch messages. Check your connection.', retryDelay);
-                
-                // Clear existing timeout if any
-                if (retryTimeout) {
-                    clearTimeout(retryTimeout);
+                if (retryCount < MAX_RETRY_COUNT) {
+                    // Calculate retry delay and schedule retry
+                    const retryDelay = calculateRetryDelay();
+                    showError(
+                        `Failed to fetch messages: ${error.message || 'Connection error'}`, 
+                        retryDelay
+                    );
+                    
+                    // Clear existing timeout if any
+                    if (retryTimeout) {
+                        clearTimeout(retryTimeout);
+                    }
+                    
+                    // Schedule retry
+                    retryTimeout = setTimeout(() => {
+                        retryCount++;
+                        fetchMessages(true);
+                    }, retryDelay);
+                } else {
+                    showError('Maximum retry attempts reached. Please try again later.');
                 }
-                
-                // Schedule retry
-                retryTimeout = setTimeout(() => {
-                    retryCount++;
-                    fetchMessages();
-                }, retryDelay);
                 
             } finally {
                 hideLoading();
@@ -167,6 +210,10 @@
             
             if (!message) return;
 
+            const sendButton = document.getElementById('sendButton');
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Sending...';
+
             try {
                 const response = await fetch('/api/items/', {
                     method: 'POST',
@@ -179,17 +226,31 @@
                     })
                 });
 
-                if (response.ok) {
-                    titleInput.value = '';
-                    await fetchMessages();
-                } else {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.message || `HTTP error! status: ${response.status}`);
                 }
+
+                titleInput.value = '';
+                await fetchMessages();
+                
             } catch (error) {
                 console.error('Error sending message:', error);
-                showError('Failed to send message. Please try again.');
+                showError(`Failed to send message: ${error.message}`);
+            } finally {
+                sendButton.disabled = false;
+                sendButton.textContent = 'Send';
             }
         }
+
+        // Handle manual retry
+        document.getElementById('retryButton').addEventListener('click', () => {
+            hideError();
+            if (retryTimeout) {
+                clearTimeout(retryTimeout);
+            }
+            fetchMessages(true);
+        });
 
         // Handle online/offline states
         window.addEventListener('online', () => {
@@ -210,7 +271,7 @@
         // Initial fetch and set up auto-refresh
         fetchMessages();
         setInterval(() => {
-            if (isOnline) {
+            if (isOnline && retryCount === 0) {
                 fetchMessages();
             }
         }, 1000);

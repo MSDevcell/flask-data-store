@@ -1,4 +1,4 @@
-from flask import request, make_response, render_template
+from flask import request, make_response, render_template, jsonify
 from flask_restx import Resource
 from app import db
 from models import Item
@@ -7,7 +7,8 @@ from utils.validators import validate_item_input
 import csv
 from io import StringIO
 import logging
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,8 +59,13 @@ def register_routes(ns):
             """Get all items sorted by creation time (newest first)"""
             try:
                 logger.info("Checking database connection")
-                # Check database connection using db.text()
-                db.session.execute(db.text('SELECT 1'))
+                try:
+                    # Check database connection using db.text()
+                    db.session.execute(db.text('SELECT 1'))
+                    logger.info("Database connection successful")
+                except OperationalError as e:
+                    logger.error(f"Database connection failed: {str(e)}")
+                    return jsonify({'error': 'Database connection failed', 'message': str(e)}), 503
                 
                 logger.info("Fetching string-type items")
                 items = Item.query.order_by(Item.created_at.desc()).all()
@@ -74,13 +80,14 @@ def register_routes(ns):
             except SQLAlchemyError as e:
                 logger.error(f"Database error in string-type items: {str(e)}")
                 db.session.rollback()
-                return []
+                return jsonify({'error': 'Database error', 'message': str(e)}), 500
             except Exception as e:
                 logger.error(f"Unexpected error in string-type items: {str(e)}")
-                return []
+                return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
             finally:
                 try:
                     db.session.close()
+                    logger.debug("Database session closed")
                 except Exception as e:
                     logger.error(f"Error closing database session: {str(e)}")
 
