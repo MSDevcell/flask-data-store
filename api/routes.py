@@ -7,12 +7,17 @@ from utils.validators import validate_item_input
 import csv
 from io import StringIO
 import logging
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DatabaseError
 from datetime import datetime
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Constants
+MAX_RETRIES = 3
+RETRY_DELAY = 0.5  # seconds
 
 def register_routes(ns):
     @ns.route('/')
@@ -49,41 +54,62 @@ def register_routes(ns):
             except SQLAlchemyError as e:
                 logger.error(f"Database error when creating item: {str(e)}")
                 db.session.rollback()
-                return {'error': 'Database error occurred'}, 500
+                return {'error': 'Database error occurred', 'message': str(e)}, 500
 
     @ns.route('/string-type')
     class StringItems(Resource):
+        def try_connect(self):
+            """Try to establish database connection with retries"""
+            for attempt in range(MAX_RETRIES):
+                try:
+                    db.session.execute(db.text('SELECT 1'))
+                    logger.info("Database connection successful")
+                    return True
+                except OperationalError as e:
+                    if attempt < MAX_RETRIES - 1:
+                        logger.warning(f"Database connection attempt {attempt + 1} failed, retrying...")
+                        time.sleep(RETRY_DELAY * (attempt + 1))
+                    else:
+                        logger.error(f"Database connection failed after {MAX_RETRIES} attempts: {str(e)}")
+                        return False
+            return False
+
         @ns.doc('get_string_items')
         @ns.marshal_list_with(item_model)
         def get(self):
             """Get all items sorted by creation time (newest first)"""
             try:
                 logger.info("Checking database connection")
-                try:
-                    # Check database connection using db.text()
-                    db.session.execute(db.text('SELECT 1'))
-                    logger.info("Database connection successful")
-                except OperationalError as e:
-                    logger.error(f"Database connection failed: {str(e)}")
-                    return jsonify({'error': 'Database connection failed', 'message': str(e)}), 503
-                
+                if not self.try_connect():
+                    return jsonify({
+                        'error': 'Database connection failed',
+                        'message': 'Unable to establish database connection'
+                    }), 503
+
                 logger.info("Fetching string-type items")
                 items = Item.query.order_by(Item.created_at.desc()).all()
                 logger.info(f"Successfully retrieved {len(items)} items")
                 
-                # Debug log item details
-                for item in items:
-                    logger.debug(f"Item {item.id}: {item.title} (created: {item.created_at})")
+                # Return empty list if no items found
+                if not items:
+                    logger.info("No items found")
+                    return []
                 
                 return items
                 
-            except SQLAlchemyError as e:
+            except DatabaseError as e:
                 logger.error(f"Database error in string-type items: {str(e)}")
                 db.session.rollback()
-                return jsonify({'error': 'Database error', 'message': str(e)}), 500
+                return jsonify({
+                    'error': 'Database error',
+                    'message': str(e)
+                }), 500
             except Exception as e:
                 logger.error(f"Unexpected error in string-type items: {str(e)}")
-                return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+                return jsonify({
+                    'error': 'Internal server error',
+                    'message': str(e)
+                }), 500
             finally:
                 try:
                     db.session.close()
@@ -102,14 +128,11 @@ def register_routes(ns):
                 items = Item.query.all()
                 logger.info(f"Exporting {len(items)} items to CSV")
                 
-                # Create a string buffer to write CSV data
                 si = StringIO()
                 writer = csv.writer(si)
                 
-                # Write headers
                 writer.writerow(['ID', 'Title', 'Description', 'Created At', 'Updated At'])
                 
-                # Write item data
                 for item in items:
                     writer.writerow([
                         item.id,
@@ -125,7 +148,7 @@ def register_routes(ns):
                 return output
             except SQLAlchemyError as e:
                 logger.error(f"Database error when exporting items: {str(e)}")
-                return {'error': 'Database error occurred'}, 500
+                return {'error': 'Database error occurred', 'message': str(e)}, 500
 
     @ns.route('/<int:id>')
     @ns.response(404, 'Item not found')
@@ -141,7 +164,7 @@ def register_routes(ns):
                 return item
             except SQLAlchemyError as e:
                 logger.error(f"Database error when fetching item {id}: {str(e)}")
-                return {'error': 'Database error occurred'}, 500
+                return {'error': 'Database error occurred', 'message': str(e)}, 500
 
         @ns.doc('update_item')
         @ns.expect(item_input_model)
@@ -161,7 +184,7 @@ def register_routes(ns):
             except SQLAlchemyError as e:
                 logger.error(f"Database error when updating item {id}: {str(e)}")
                 db.session.rollback()
-                return {'error': 'Database error occurred'}, 500
+                return {'error': 'Database error occurred', 'message': str(e)}, 500
 
         @ns.doc('delete_item')
         @ns.response(204, 'Item deleted')
@@ -176,7 +199,7 @@ def register_routes(ns):
             except SQLAlchemyError as e:
                 logger.error(f"Database error when deleting item {id}: {str(e)}")
                 db.session.rollback()
-                return {'error': 'Database error occurred'}, 500
+                return {'error': 'Database error occurred', 'message': str(e)}, 500
 
     # Chat interface route
     @ns.route('/chat')
@@ -188,4 +211,4 @@ def register_routes(ns):
                 return make_response(render_template('chat.html'))
             except Exception as e:
                 logger.error(f"Error rendering chat interface: {str(e)}")
-                return {'error': str(e)}, 500
+                return {'error': 'Error rendering chat interface', 'message': str(e)}, 500
