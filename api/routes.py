@@ -18,6 +18,24 @@ logger = logging.getLogger(__name__)
 # Constants
 MAX_RETRIES = 3
 RETRY_DELAY = 0.5  # seconds
+MAX_RETRY_BACKOFF = 5  # seconds
+
+def try_database_operation(operation, max_retries=MAX_RETRIES):
+    """Execute database operation with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            return operation(), None
+        except OperationalError as e:
+            if attempt < max_retries - 1:
+                delay = min(RETRY_DELAY * (2 ** attempt), MAX_RETRY_BACKOFF)
+                logger.warning(f"Database operation failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {str(e)}")
+                time.sleep(delay)
+            else:
+                logger.error(f"Database operation failed after {max_retries} attempts: {str(e)}")
+                return None, str(e)
+        except SQLAlchemyError as e:
+            logger.error(f"Database error: {str(e)}")
+            return None, str(e)
 
 def register_routes(ns):
     @ns.route('/')
@@ -39,56 +57,86 @@ def register_routes(ns):
         @ns.marshal_with(item_model, code=201)
         def post(self):
             """Create a new item"""
+            logger.info("Received POST request to create new item")
+            data = request.json
+            logger.debug(f"Request payload: {data}")
+
             try:
-                data = request.json
+                # Validate input
                 validate_item_input(data)
+                logger.debug("Input validation successful")
                 
+                # Start transaction
                 item = Item(
                     title=data['title'],
                     description=data.get('description', '')
                 )
-                db.session.add(item)
-                db.session.commit()
-                logger.info(f"Created new item with id: {item.id}")
-                return item, 201
-            except SQLAlchemyError as e:
-                logger.error(f"Database error when creating item: {str(e)}")
+                logger.info(f"Creating new item with title: {item.title}")
+                
+                def db_operation():
+                    db.session.add(item)
+                    db.session.commit()
+                    return item
+
+                result, error = try_database_operation(db_operation)
+                
+                if error:
+                    logger.error(f"Failed to create item: {error}")
+                    return {'error': 'Database error occurred', 'message': error}, 500
+                
+                logger.info(f"Successfully created item with id: {result.id}")
+                return result, 201
+
+            except Exception as e:
+                logger.error(f"Unexpected error creating item: {str(e)}")
                 db.session.rollback()
-                return {'error': 'Database error occurred', 'message': str(e)}, 500
+                return {'error': 'Error occurred', 'message': str(e)}, 500
 
     @ns.route('/string-type')
     class StringItems(Resource):
         def try_connect(self):
             """Try to establish database connection with retries"""
-            for attempt in range(MAX_RETRIES):
-                try:
-                    db.session.execute(db.text('SELECT 1'))
-                    logger.info("Database connection successful")
-                    return True
-                except OperationalError as e:
-                    if attempt < MAX_RETRIES - 1:
-                        logger.warning(f"Database connection attempt {attempt + 1} failed, retrying...")
-                        time.sleep(RETRY_DELAY * (attempt + 1))
-                    else:
-                        logger.error(f"Database connection failed after {MAX_RETRIES} attempts: {str(e)}")
-                        return False
-            return False
+            logger.info("Attempting to establish database connection")
+            
+            def check_connection():
+                db.session.execute(db.text('SELECT 1'))
+                return True
+
+            result, error = try_database_operation(check_connection)
+            if error:
+                logger.error(f"Database connection failed: {error}")
+                return False
+            
+            logger.info("Database connection successful")
+            return True
 
         @ns.doc('get_string_items')
         @ns.marshal_list_with(item_model)
         def get(self):
             """Get all items sorted by creation time (newest first)"""
             try:
-                logger.info("Checking database connection")
+                # Check database connection
                 if not self.try_connect():
+                    logger.error("Failed to establish database connection")
                     return jsonify({
                         'error': 'Database connection failed',
                         'message': 'Unable to establish database connection'
                     }), 503
 
                 logger.info("Fetching speech items")
-                items = Item.query.filter_by(description='speech').order_by(Item.created_at.desc()).all()
                 
+                def fetch_items():
+                    return Item.query.filter_by(description='speech').order_by(Item.created_at.desc()).all()
+
+                items, error = try_database_operation(fetch_items)
+                
+                if error:
+                    logger.error(f"Error fetching speech items: {error}")
+                    return jsonify({
+                        'error': 'Database error',
+                        'message': error
+                    }), 500
+
                 # Debug logging for found items
                 logger.debug(f"Found {len(items)} speech items:")
                 for item in items:
@@ -101,14 +149,7 @@ def register_routes(ns):
                 
                 logger.info(f"Successfully retrieved {len(items)} speech items")
                 return items
-                
-            except DatabaseError as e:
-                logger.error(f"Database error in string-type items: {str(e)}")
-                db.session.rollback()
-                return jsonify({
-                    'error': 'Database error',
-                    'message': str(e)
-                }), 500
+
             except Exception as e:
                 logger.error(f"Unexpected error in string-type items: {str(e)}")
                 return jsonify({
