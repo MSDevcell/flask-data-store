@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import request, current_app
 from flask_restx import Resource
 from werkzeug.utils import secure_filename
@@ -17,12 +17,32 @@ logger = logging.getLogger(__name__)
 # Constants
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mp3', 'wav', 'pdf', 'doc', 'docx'}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+DEFAULT_SENDER_NAME = 'anonymous'
+DEFAULT_DELETION_TIME_HOURS = 24
+
+# Content type to data type mapping
+MIME_TYPE_MAPPING = {
+    'image/jpeg': 'image',
+    'image/png': 'image',
+    'image/gif': 'image',
+    'video/mp4': 'video',
+    'audio/mpeg': 'audio',
+    'audio/wav': 'audio',
+    'application/pdf': 'document',
+    'application/msword': 'document',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document'
+}
+
 ALLOWED_MIME_TYPES = {
     'image': ['image/jpeg', 'image/png', 'image/gif'],
     'video': ['video/mp4'],
     'audio': ['audio/mpeg', 'audio/wav'],
     'document': ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
 }
+
+def get_data_type_from_mime(content_type):
+    """Determine data type from MIME type"""
+    return MIME_TYPE_MAPPING.get(content_type, 'unknown')
 
 def allowed_file(filename):
     """Check if the file extension is allowed"""
@@ -80,11 +100,11 @@ def register_media_routes(ns):
     @ns.route('/')
     class MediaFileUpload(Resource):
         @ns.doc('upload_media_file',
-               description='Upload a media file with metadata')
+               description='Upload a media file with metadata. All metadata fields are optional.')
         @ns.expect(media_upload_model)
         @ns.marshal_with(media_file_model, code=201)
         def post(self):
-            """Upload a new media file"""
+            """Upload a new media file with optional metadata"""
             try:
                 if 'file' not in request.files:
                     ns.abort(400, "No file part in the request")
@@ -96,11 +116,22 @@ def register_media_routes(ns):
                     ns.abort(400, error_message)
 
                 data = request.form
-                if not all(k in data for k in ['sender_name', 'data_type', 'deletion_time']):
-                    ns.abort(400, "Missing required metadata fields: sender_name, data_type, deletion_time")
+                
+                # Handle optional fields with defaults
+                sender_name = data.get('sender_name', DEFAULT_SENDER_NAME)
+                logger.info(f"Using sender name: {sender_name}")
 
+                # Determine data type from content type if not provided
+                data_type = data.get('data_type')
+                if not data_type:
+                    data_type = get_data_type_from_mime(file.content_type)
+                    logger.info(f"Automatically determined data type: {data_type}")
+
+                # Set deletion time to 24 hours from now if not provided
                 try:
-                    deletion_time = datetime.fromisoformat(data['deletion_time'])
+                    deletion_time = datetime.fromisoformat(data['deletion_time']) if 'deletion_time' in data else \
+                                  datetime.utcnow() + timedelta(hours=DEFAULT_DELETION_TIME_HOURS)
+                    logger.info(f"Using deletion time: {deletion_time.isoformat()}")
                 except ValueError:
                     ns.abort(400, "Invalid deletion_time format. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
 
@@ -122,8 +153,8 @@ def register_media_routes(ns):
                 # Create media file record
                 try:
                     media_file = MediaFile(
-                        sender_name=data['sender_name'],
-                        data_type=data['data_type'],
+                        sender_name=sender_name,
+                        data_type=data_type,
                         file_path=file_path,
                         deletion_time=deletion_time,
                         content_type=file.content_type
@@ -179,29 +210,29 @@ def register_media_routes(ns):
                 logger.error(f"Error retrieving media files by timespan: {str(e)}")
                 ns.abort(500, f"Error retrieving media files: {str(e)}")
 
-# Background task to delete expired media files
 def delete_expired_files():
     """Delete media files that have passed their deletion time"""
-    try:
-        expired_files = MediaFile.query.filter(
-            MediaFile.deletion_time <= datetime.utcnow()
-        ).all()
-        
-        for media_file in expired_files:
-            try:
-                # Delete the physical file
-                file_path = os.path.join(current_app.root_path, media_file.file_path)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    logger.info(f"Deleted expired file: {file_path}")
-                
-                # Delete the database record
-                db.session.delete(media_file)
-                logger.info(f"Deleted media file record: {media_file.id}")
-            except Exception as e:
-                logger.error(f"Error deleting file {media_file.id}: {str(e)}")
-        
-        db.session.commit()
-    except Exception as e:
-        logger.error(f"Error in delete_expired_files: {str(e)}")
-        db.session.rollback()
+    with current_app.app_context():
+        try:
+            expired_files = MediaFile.query.filter(
+                MediaFile.deletion_time <= datetime.utcnow()
+            ).all()
+            
+            for media_file in expired_files:
+                try:
+                    # Delete the physical file
+                    file_path = os.path.join(current_app.root_path, media_file.file_path)
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Deleted expired file: {file_path}")
+                    
+                    # Delete the database record
+                    db.session.delete(media_file)
+                    logger.info(f"Deleted media file record: {media_file.id}")
+                except Exception as e:
+                    logger.error(f"Error deleting file {media_file.id}: {str(e)}")
+            
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Error in delete_expired_files: {str(e)}")
+            db.session.rollback()

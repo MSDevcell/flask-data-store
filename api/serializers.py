@@ -18,18 +18,18 @@ item_input_model = items_ns.model('ItemInput', {
 # Media file models
 media_file_model = media_ns.model('MediaFile', {
     'id': fields.Integer(readonly=True, description='Media file identifier'),
-    'sender_name': fields.String(required=True, description='Name of the sender'),
-    'data_type': fields.String(required=True, description='Type of media data'),
+    'sender_name': fields.String(description='Name of the sender (default: anonymous)'),
+    'data_type': fields.String(description='Type of media data (automatically detected if not provided)'),
     'timestamp': fields.DateTime(readonly=True),
     'file_path': fields.String(readonly=True),
-    'deletion_time': fields.DateTime(required=True, description='When the file should be deleted'),
-    'content_type': fields.String(required=True, description='MIME type of the content')
+    'deletion_time': fields.DateTime(description='When the file should be deleted (default: 24 hours from upload)'),
+    'content_type': fields.String(readonly=True, description='MIME type of the content')
 })
 
 media_upload_model = media_ns.model('MediaUpload', {
-    'sender_name': fields.String(required=True, description='Name of the sender'),
-    'data_type': fields.String(required=True, description='Type of media data'),
-    'deletion_time': fields.DateTime(required=True, description='When the file should be deleted')
+    'sender_name': fields.String(required=False, description='Name of the sender (optional, default: anonymous)'),
+    'data_type': fields.String(required=False, description='Type of media data (optional, auto-detected from file type)'),
+    'deletion_time': fields.DateTime(required=False, description='When the file should be deleted (optional, default: 24 hours from upload)')
 })
 
 # Function definition models
