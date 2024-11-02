@@ -2,130 +2,147 @@
 
 This guide demonstrates how to use the Dynamic Function Integration API to upload, execute, and manage custom functions.
 
-## Example Functions
+## Basic Calculator Example
 
-### 1. Square Number Function
+### Function Code
 ```python
 def process(parameters):
-    # Simple example that squares a number
-    number = parameters.get('number', 0)
-    return number * number
+    operation = parameters.get('operation', 'add')
+    num1 = parameters.get('num1', 0)
+    num2 = parameters.get('num2', 0)
+    
+    if operation == 'add':
+        return num1 + num2
+    elif operation == 'subtract':
+        return num1 - num2
+    elif operation == 'multiply':
+        return num1 * num2
+    elif operation == 'divide':
+        if num2 == 0:
+            return {'error': 'Division by zero'}
+        return num1 / num2
+    else:
+        return {'error': 'Invalid operation'}
 ```
 
-**Upload Request:**
+### Step-by-Step Guide
+
+1. Upload the Function
+
 ```http
 POST /api/functions/
 Content-Type: application/json
 
 {
-  "name": "square_number",
-  "code": "def process(parameters):\n    number = parameters.get('number', 0)\n    return number * number",
-  "description": "Squares a given number",
-  "parameters": {"number": "integer"}
-}
-```
-
-**Execute Request:**
-```http
-POST /api/functions/square_number/execute
-Content-Type: application/json
-
-{
-  "parameters": {"number": 5}
-}
-```
-
-**Expected Response:**
-```json
-{
-  "result": 25
-}
-```
-
-### 2. Temperature Converter Function
-```python
-def process(parameters):
-    # Convert between Celsius and Fahrenheit
-    celsius = parameters.get('celsius')
-    if celsius is None:
-        return {"error": "Temperature in Celsius is required"}
-    fahrenheit = (celsius * 9/5) + 32
-    return {"celsius": celsius, "fahrenheit": fahrenheit}
-```
-
-**Upload Request:**
-```http
-POST /api/functions/
-Content-Type: application/json
-
-{
-  "name": "temp_converter",
-  "code": "def process(parameters):\n    celsius = parameters.get('celsius')\n    if celsius is None:\n        return {\"error\": \"Temperature in Celsius is required\"}\n    fahrenheit = (celsius * 9/5) + 32\n    return {\"celsius\": celsius, \"fahrenheit\": fahrenheit}",
-  "description": "Converts temperature from Celsius to Fahrenheit",
-  "parameters": {"celsius": "float"}
-}
-```
-
-**Execute Request:**
-```http
-POST /api/functions/temp_converter/execute
-Content-Type: application/json
-
-{
-  "parameters": {"celsius": 25}
-}
-```
-
-**Expected Response:**
-```json
-{
-  "result": {
-    "celsius": 25,
-    "fahrenheit": 77
+  "name": "calculator",
+  "code": "def process(parameters):\n    operation = parameters.get('operation', 'add')\n    num1 = parameters.get('num1', 0)\n    num2 = parameters.get('num2', 0)\n\n    if operation == 'add':\n        return num1 + num2\n    elif operation == 'subtract':\n        return num1 - num2\n    elif operation == 'multiply':\n        return num1 * num2\n    elif operation == 'divide':\n        if num2 == 0:\n            return {'error': 'Division by zero'}\n        return num1 / num2\n    else:\n        return {'error': 'Invalid operation'}",
+  "description": "Basic calculator with add/subtract/multiply/divide operations",
+  "parameters": {
+    "operation": {
+      "type": "string",
+      "required": true,
+      "description": "Operation to perform (add/subtract/multiply/divide)"
+    },
+    "num1": {
+      "type": "float",
+      "required": true,
+      "description": "First number"
+    },
+    "num2": {
+      "type": "float",
+      "required": true,
+      "description": "Second number"
+    }
   }
 }
 ```
 
-## API Usage Guide
+2. Execute the Function
 
-### List Available Functions
 ```http
-GET /api/functions/
-```
-
-### Upload New Function
-```http
-POST /api/functions/
+POST /api/functions/calculator/execute
 Content-Type: application/json
 
 {
-  "name": "function_name",
-  "code": "function_code",
-  "description": "function_description",
-  "parameters": parameter_schema
+  "parameters": {
+    "operation": "add",
+    "num1": 5,
+    "num2": 3
+  }
 }
+```
+
+Expected Response:
+```json
+{
+  "result": 8
+}
+```
+
+## Example Usage with curl
+
+### Upload Function
+```bash
+curl -X POST http://localhost:5000/api/functions/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "calculator",
+    "code": "def process(parameters):\n    operation = parameters.get('\''operation'\'', '\''add'\'')\n    num1 = parameters.get('\''num1'\'', 0)\n    num2 = parameters.get('\''num2'\'', 0)\n\n    if operation == '\''add'\'':\n        return num1 + num2\n    elif operation == '\''subtract'\'':\n        return num1 - num2\n    elif operation == '\''multiply'\'':\n        return num1 * num2\n    elif operation == '\''divide'\'':\n        if num2 == 0:\n            return {'\''error'\'': '\''Division by zero'\''}\n        return num1 / num2\n    else:\n        return {'\''error'\'': '\''Invalid operation'\''}",
+    "description": "Basic calculator with add/subtract/multiply/divide operations",
+    "parameters": {
+      "operation": {
+        "type": "string",
+        "required": true,
+        "description": "Operation to perform (add/subtract/multiply/divide)"
+      },
+      "num1": {
+        "type": "float",
+        "required": true,
+        "description": "First number"
+      },
+      "num2": {
+        "type": "float",
+        "required": true,
+        "description": "Second number"
+      }
+    }
+  }'
 ```
 
 ### Execute Function
-```http
-POST /api/functions/{function_name}/execute
-Content-Type: application/json
-
-{
-  "parameters": parameter_values
-}
+```bash
+curl -X POST http://localhost:5000/api/functions/calculator/execute \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parameters": {
+      "operation": "add",
+      "num1": 5,
+      "num2": 3
+    }
+  }'
 ```
 
-### Delete Function
-```http
-DELETE /api/functions/{function_name}
-```
+## API Usage Notes
 
-## Security Notes
+1. Function names must be unique
+2. Functions must be named 'process' and accept a single 'parameters' argument
+3. Parameters schema must specify type and whether they are required
+4. Available parameter types: string, integer, float, boolean, list, dict
+5. Functions are validated for security:
+   - No imports allowed
+   - No file operations
+   - No dangerous built-ins (eval, exec)
+   - Pure Python code only
 
-The function validation system ensures:
-1. No import statements are allowed
-2. No file operations (read/write) are permitted
-3. No dangerous built-in functions (eval, exec) can be used
-4. Functions must be named 'process' and accept only 'parameters' argument
-5. Only pure Python code is allowed (no system calls or external dependencies)
+## Error Handling
+
+The API returns appropriate error responses:
+- 400: Invalid parameters or function code
+- 404: Function not found
+- 500: Execution error (timeout, memory limit, runtime error)
+
+## Execution Limits
+
+- Timeout: 5 seconds
+- Memory: 100 MB
+- CPU: Limited by system resources
