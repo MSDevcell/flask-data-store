@@ -100,7 +100,33 @@ def register_media_routes(ns):
     @ns.route('/')
     class MediaFileUpload(Resource):
         @ns.doc('upload_media_file',
-               description='Upload a media file with metadata. All metadata fields are optional.')
+               description='''Upload a media file with optional metadata.
+               
+File Constraints:
+- Maximum file size: 10MB
+- Allowed file types: png, jpg, jpeg, gif, mp4, mp3, wav, pdf, doc, docx
+
+Default Values:
+- sender_name: "anonymous" if not provided
+- data_type: automatically detected from file type
+- deletion_time: 24 hours from upload if not provided
+
+Example Requests:
+1. Basic file upload without metadata:
+   ```
+   curl -X POST http://localhost:5000/api/media/
+        -F "file=@image.jpg"
+   ```
+
+2. File upload with all optional parameters:
+   ```
+   curl -X POST http://localhost:5000/api/media/
+        -F "file=@video.mp4"
+        -F "sender_name=john_doe"
+        -F "data_type=video"
+        -F "deletion_time=2024-11-03T00:00:00"
+   ```
+               ''')
         @ns.expect(media_upload_model)
         @ns.marshal_with(media_file_model, code=201)
         def post(self):
@@ -177,7 +203,19 @@ def register_media_routes(ns):
     @ns.route('/by-type/<string:type>')
     class MediaFileByType(Resource):
         @ns.doc('get_media_by_type',
-               description='Get media files filtered by type')
+               description='''Get media files filtered by type.
+               
+Supported Types:
+- image: Images (jpg, png, gif)
+- video: Video files (mp4)
+- audio: Audio files (mp3, wav)
+- document: Documents (pdf, doc, docx)
+
+Example Request:
+```
+curl http://localhost:5000/api/media/by-type/image
+```
+               ''')
         @ns.marshal_list_with(media_file_model)
         def get(self, type):
             """Get media files by type"""
@@ -188,11 +226,17 @@ def register_media_routes(ns):
                 ns.abort(500, f"Error retrieving media files: {str(e)}")
 
     @ns.route('/by-timespan')
-    @ns.param('start', 'Start timestamp (ISO format)')
-    @ns.param('end', 'End timestamp (ISO format)')
+    @ns.param('start', 'Start timestamp in ISO format (YYYY-MM-DDTHH:MM:SS)')
+    @ns.param('end', 'End timestamp in ISO format (YYYY-MM-DDTHH:MM:SS)')
     class MediaFileByTimespan(Resource):
         @ns.doc('get_media_by_timespan',
-               description='Get media files within a timespan')
+               description='''Get media files within a specified timespan.
+               
+Example Request:
+```
+curl "http://localhost:5000/api/media/by-timespan?start=2024-11-01T00:00:00&end=2024-11-02T23:59:59"
+```
+               ''')
         @ns.marshal_list_with(media_file_model)
         def get(self):
             """Get media files within a timespan"""

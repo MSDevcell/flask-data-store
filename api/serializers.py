@@ -18,18 +18,19 @@ item_input_model = items_ns.model('ItemInput', {
 # Media file models
 media_file_model = media_ns.model('MediaFile', {
     'id': fields.Integer(readonly=True, description='Media file identifier'),
-    'sender_name': fields.String(description='Name of the sender (default: anonymous)'),
-    'data_type': fields.String(description='Type of media data (automatically detected if not provided)'),
-    'timestamp': fields.DateTime(readonly=True),
-    'file_path': fields.String(readonly=True),
-    'deletion_time': fields.DateTime(description='When the file should be deleted (default: 24 hours from upload)'),
-    'content_type': fields.String(readonly=True, description='MIME type of the content')
+    'sender_name': fields.String(description='Name of the sender (optional, defaults to "anonymous")'),
+    'data_type': fields.String(description='Type of media data (optional, auto-detected from file type: image, video, audio, document)'),
+    'timestamp': fields.DateTime(readonly=True, description='Upload timestamp (auto-generated)'),
+    'file_path': fields.String(readonly=True, description='Server path where file is stored'),
+    'deletion_time': fields.DateTime(description='Scheduled deletion time (optional, defaults to 24 hours from upload)'),
+    'content_type': fields.String(readonly=True, description='MIME type of the content (auto-detected from file)')
 })
 
 media_upload_model = media_ns.model('MediaUpload', {
-    'sender_name': fields.String(required=False, description='Name of the sender (optional, default: anonymous)'),
+    'file': fields.Raw(required=True, description='Media file to upload (max size: 10MB, allowed types: png, jpg, jpeg, gif, mp4, mp3, wav, pdf, doc, docx)'),
+    'sender_name': fields.String(required=False, description='Name of the sender (optional, defaults to "anonymous")'),
     'data_type': fields.String(required=False, description='Type of media data (optional, auto-detected from file type)'),
-    'deletion_time': fields.DateTime(required=False, description='When the file should be deleted (optional, default: 24 hours from upload)')
+    'deletion_time': fields.DateTime(required=False, description='When the file should be deleted (optional, ISO format, defaults to 24 hours from upload)')
 })
 
 # Function definition models
