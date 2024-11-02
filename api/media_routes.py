@@ -3,10 +3,74 @@ from flask import request, current_app
 from flask_restx import Resource
 from werkzeug.utils import secure_filename
 import os
+import uuid
+import logging
 from app import db
 from models import MediaFile
 from api.serializers import media_file_model, media_upload_model
 import mimetypes
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Constants
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mp3', 'wav', 'pdf', 'doc', 'docx'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ALLOWED_MIME_TYPES = {
+    'image': ['image/jpeg', 'image/png', 'image/gif'],
+    'video': ['video/mp4'],
+    'audio': ['audio/mpeg', 'audio/wav'],
+    'document': ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+}
+
+def allowed_file(filename):
+    """Check if the file extension is allowed"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def validate_file_upload(file):
+    """Validate file upload including size, extension, and content type"""
+    if not file:
+        return False, "No file provided"
+    
+    if not file.filename:
+        return False, "No filename provided"
+    
+    if not allowed_file(file.filename):
+        return False, f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+    
+    if not file.content_type:
+        content_type = mimetypes.guess_type(file.filename)[0]
+        if not content_type:
+            return False, "Could not determine file content type"
+        file.content_type = content_type
+    
+    # Validate content type
+    valid_mime_type = False
+    for mime_types in ALLOWED_MIME_TYPES.values():
+        if file.content_type in mime_types:
+            valid_mime_type = True
+            break
+    if not valid_mime_type:
+        return False, f"Invalid content type: {file.content_type}"
+    
+    # Check file size
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    file.seek(0)
+    if size > MAX_FILE_SIZE:
+        return False, f"File too large. Maximum size allowed: {MAX_FILE_SIZE/1024/1024}MB"
+    
+    return True, None
+
+def cleanup_file(file_path):
+    """Clean up file in case of failure"""
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Cleaned up file: {file_path}")
+    except Exception as e:
+        logger.error(f"Error cleaning up file {file_path}: {str(e)}")
 
 def register_media_routes(ns):
     # Ensure upload directory exists
@@ -21,41 +85,63 @@ def register_media_routes(ns):
         @ns.marshal_with(media_file_model, code=201)
         def post(self):
             """Upload a new media file"""
-            if 'file' not in request.files:
-                ns.abort(400, "No file provided")
-            
-            file = request.files['file']
-            if file.filename == '':
-                ns.abort(400, "No file selected")
-
-            data = request.form
-            if not all(k in data for k in ['sender_name', 'data_type', 'deletion_time']):
-                ns.abort(400, "Missing required metadata fields")
-
             try:
-                deletion_time = datetime.fromisoformat(data['deletion_time'])
-            except ValueError:
-                ns.abort(400, "Invalid deletion_time format. Use ISO format")
+                if 'file' not in request.files:
+                    ns.abort(400, "No file part in the request")
+                
+                file = request.files['file']
+                # Validate file
+                is_valid, error_message = validate_file_upload(file)
+                if not is_valid:
+                    ns.abort(400, error_message)
 
-            filename = secure_filename(file.filename)
-            file_path = os.path.join('uploads', filename)
-            
-            # Save the file
-            file.save(os.path.join(current_app.root_path, file_path))
-            
-            # Create media file record
-            media_file = MediaFile(
-                sender_name=data['sender_name'],
-                data_type=data['data_type'],
-                file_path=file_path,
-                deletion_time=deletion_time,
-                content_type=file.content_type or mimetypes.guess_type(filename)[0]
-            )
-            
-            db.session.add(media_file)
-            db.session.commit()
-            
-            return media_file, 201
+                data = request.form
+                if not all(k in data for k in ['sender_name', 'data_type', 'deletion_time']):
+                    ns.abort(400, "Missing required metadata fields: sender_name, data_type, deletion_time")
+
+                try:
+                    deletion_time = datetime.fromisoformat(data['deletion_time'])
+                except ValueError:
+                    ns.abort(400, "Invalid deletion_time format. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
+
+                # Generate secure filename with UUID
+                original_extension = file.filename.rsplit('.', 1)[1].lower()
+                filename = f"{uuid.uuid4()}.{original_extension}"
+                file_path = os.path.join('uploads', filename)
+                full_path = os.path.join(current_app.root_path, file_path)
+                
+                # Save the file
+                try:
+                    file.save(full_path)
+                    logger.info(f"File saved successfully: {filename}")
+                except Exception as e:
+                    logger.error(f"Error saving file: {str(e)}")
+                    cleanup_file(full_path)
+                    ns.abort(500, f"Error saving file: {str(e)}")
+                
+                # Create media file record
+                try:
+                    media_file = MediaFile(
+                        sender_name=data['sender_name'],
+                        data_type=data['data_type'],
+                        file_path=file_path,
+                        deletion_time=deletion_time,
+                        content_type=file.content_type
+                    )
+                    
+                    db.session.add(media_file)
+                    db.session.commit()
+                    logger.info(f"Media file record created: {media_file.id}")
+                    return media_file, 201
+                except Exception as e:
+                    logger.error(f"Database error: {str(e)}")
+                    cleanup_file(full_path)
+                    db.session.rollback()
+                    ns.abort(500, f"Error creating media file record: {str(e)}")
+                    
+            except Exception as e:
+                logger.error(f"Unexpected error in file upload: {str(e)}")
+                ns.abort(500, f"Unexpected error: {str(e)}")
 
     @ns.route('/by-type/<string:type>')
     class MediaFileByType(Resource):
@@ -64,7 +150,11 @@ def register_media_routes(ns):
         @ns.marshal_list_with(media_file_model)
         def get(self, type):
             """Get media files by type"""
-            return MediaFile.query.filter_by(data_type=type).all()
+            try:
+                return MediaFile.query.filter_by(data_type=type).all()
+            except Exception as e:
+                logger.error(f"Error retrieving media files by type: {str(e)}")
+                ns.abort(500, f"Error retrieving media files: {str(e)}")
 
     @ns.route('/by-timespan')
     @ns.param('start', 'Start timestamp (ISO format)')
@@ -79,29 +169,39 @@ def register_media_routes(ns):
                 start = datetime.fromisoformat(request.args.get('start', ''))
                 end = datetime.fromisoformat(request.args.get('end', ''))
             except ValueError:
-                ns.abort(400, "Invalid timestamp format. Use ISO format")
+                ns.abort(400, "Invalid timestamp format. Use ISO format (YYYY-MM-DDTHH:MM:SS)")
             
-            return MediaFile.query.filter(
-                MediaFile.timestamp.between(start, end)
-            ).all()
+            try:
+                return MediaFile.query.filter(
+                    MediaFile.timestamp.between(start, end)
+                ).all()
+            except Exception as e:
+                logger.error(f"Error retrieving media files by timespan: {str(e)}")
+                ns.abort(500, f"Error retrieving media files: {str(e)}")
 
 # Background task to delete expired media files
 def delete_expired_files():
     """Delete media files that have passed their deletion time"""
-    expired_files = MediaFile.query.filter(
-        MediaFile.deletion_time <= datetime.utcnow()
-    ).all()
-    
-    for media_file in expired_files:
-        try:
-            # Delete the physical file
-            file_path = os.path.join(current_app.root_path, media_file.file_path)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            
-            # Delete the database record
-            db.session.delete(media_file)
-        except Exception as e:
-            current_app.logger.error(f"Error deleting file {media_file.id}: {str(e)}")
-    
-    db.session.commit()
+    try:
+        expired_files = MediaFile.query.filter(
+            MediaFile.deletion_time <= datetime.utcnow()
+        ).all()
+        
+        for media_file in expired_files:
+            try:
+                # Delete the physical file
+                file_path = os.path.join(current_app.root_path, media_file.file_path)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Deleted expired file: {file_path}")
+                
+                # Delete the database record
+                db.session.delete(media_file)
+                logger.info(f"Deleted media file record: {media_file.id}")
+            except Exception as e:
+                logger.error(f"Error deleting file {media_file.id}: {str(e)}")
+        
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Error in delete_expired_files: {str(e)}")
+        db.session.rollback()
